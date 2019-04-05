@@ -139,212 +139,201 @@ contains
     z_ray    = 0._wp
     kr_vol   = 0._wp
 
-    do k=1,ngate       ! Loop over each profile (nprof)
-       do pr=1,nprof
-          ! Determine if hydrometeor(s) present in volume
-          hydro = .false.
-          do j=1,rcfg%nhclass
-             if ((hm_matrix(pr,k,j) > 1E-12) .and. (sd%dtype(j) > 0)) then
-                hydro = .true.
-                exit
-             endif
-          enddo
+    ! Calculate reflectivity
+    ! NOTE: this loop appears to be embarassingly parallel
+    do k=1,ngate  ! Loop over range gates (levels)
+      do pr=1,nprof  ! Loop over each profile (nprof)
+         do tp=1,rcfg%nhclass  ! Loop over hydrometeor type
+            !if ((hm_matrix(pr,k,tp) > 1E-12) .and. (sd%dtype(tp) > 0)) then
 
-          t_kelvin = t_matrix(pr,k)
-          ! If there is hydrometeor in the volume
-          if (hydro) then
-             rho_a = (p_matrix(pr,k))/(287._wp*(t_kelvin))
-             
-             ! Loop over hydrometeor type
-             do tp=1,rcfg%nhclass
-                Re_internal = re_matrix(pr,k,tp)
+            t_kelvin = t_matrix(pr,k)
+            rho_a = (p_matrix(pr,k))/(287._wp*(t_kelvin))
+         
+            Re_internal = re_matrix(pr,k,tp)
 
-                if (hm_matrix(pr,k,tp) <= 1E-12) cycle
-                
-                ! Index into temperature dimension of scaling tables
-                !   These tables have regular steps -- exploit this and abandon infind
-                phase = sd%phase(tp)
-                if (phase==0) then
-                   itt = infind(mt_ttl,t_kelvin)
-                else
-                   itt = infind(mt_tti,t_kelvin) 
-                endif
-                
-                ! Compute effective radius from number concentration and distribution parameters
-                if (Re_internal .eq. 0) then
-                   call calc_Re(hm_matrix(pr,k,tp),Np_matrix(pr,k,tp),rho_a, &
-                        sd%dtype(tp),sd%apm(tp),sd%bpm(tp),sd%rho(tp),sd%p1(tp),sd%p2(tp),sd%p3(tp),Re)
-                   Re_internal=Re
-                   !re_matrix(pr,k,tp)=Re
-                else
-                   if (Np_matrix(pr,k,tp) > 0) then
-                      call errorMessage('WARNING(optics/quickbeam_optics.f90): Re and Np set for the same volume & hydrometeor type.  Np is being ignored.')
-                   endif
-                   Re = Re_internal
-                   !Re = re_matrix(pr,k,tp)
-                endif
-                
-                ! Index into particle size dimension of scaling tables 
-                iRe_type=1
-                if(Re.gt.0) then
-                   ! Determine index in to scale LUT
-                   ! Distance between Re points (defined by "base" and "step") for
-                   ! each interval of size Re_BIN_LENGTH
-                   ! Integer asignment, avoids calling floor intrinsic
-                   n=Re/Re_BIN_LENGTH
-                   if (n>=Re_MAX_BIN) n=Re_MAX_BIN-1
-                   step = rcfg%step_list(n+1)
-                   base = rcfg%base_list(n+1)
-                   iRe_type=Re/step
-                   if (iRe_type.lt.1) iRe_type=1
-                   Re=step*(iRe_type+0.5_wp)    ! set value of Re to closest value allowed in LUT.
-                   iRe_type=iRe_type+base-int(n*Re_BIN_LENGTH/step)
-                   
-                   ! Make sure iRe_type is within bounds
-                   if (iRe_type.ge.nRe_types) then
-                      !write(*,*) 'Warning: size of Re exceed value permitted ', &
-                      !            'in Look-Up Table (LUT).  Will calculate. '
-                      ! No scaling allowed
-                      iRe_type=nRe_types
-                      rcfg%Z_scale_flag(tp,itt,iRe_type)=.false.
-                   else
-                      ! Set value in re_matrix to closest values in LUT
-                      if (.not. DO_LUT_TEST) re_internal=Re
-                      !if (.not. DO_LUT_TEST) re_matrix(pr,k,tp)=Re
-                   endif
-                endif
-                
-                ! Use Ze_scaled, Zr_scaled, and kr_scaled ... if know them
-                ! if not we will calculate Ze, Zr, and Kr from the distribution parameters
-!                if( rcfg%Z_scale_flag(tp,itt,iRe_type) .and. .not. DO_LUT_TEST)  then
-!                   ! can use z scaling
-!                   scale_factor=rho_a*hm_matrix(pr,k,tp)
-!                   zr = rcfg%Zr_scaled(tp,itt,iRe_type) * scale_factor
-!                   ze = rcfg%Ze_scaled(tp,itt,iRe_type) * scale_factor
-!                   kr = rcfg%kr_scaled(tp,itt,iRe_type) * scale_factor
-!                else
-                if( (.not. rcfg%Z_scale_flag(tp,itt,iRe_type)) .or. DO_LUT_TEST)  then
-                   ! Create a discrete distribution of hydrometeors within volume
-                   select case(sd%dtype(tp))
-                   case(4)
-                      ns = 1
-                      allocate(Di(ns),Ni(ns),rhoi(ns),xxa(ns),Deq(ns))
-                      Di = sd%p1(tp)
-                      Ni = 0._wp
-                   case default
-                      ns = nd   ! constant defined in simulator/quickbeam.f90
-                      allocate(Di(ns),Ni(ns),rhoi(ns),xxa(ns),Deq(ns))
-                      Di = D
-                      Ni = 0._wp
-                   end select
-                   call dsd(hm_matrix(pr,k,tp),re_internal,Np_matrix(pr,k,tp), &
-                        Di,Ni,ns,sd%dtype(tp),rho_a,t_kelvin, &
-                        sd%dmin(tp),sd%dmax(tp),sd%apm(tp),sd%bpm(tp), &
-                        sd%rho(tp),sd%p1(tp),sd%p2(tp),sd%p3(tp))
-                   
-                   ! Calculate particle density
-                   if (phase == 1) then
-                      if (sd%rho(tp) < 0) then
-                         ! Use equivalent volume spheres.
-                         rcfg%rho_eff(tp,1:ns,iRe_type) = rhoice ! solid ice == equivalent volume approach
-                         Deq = ( ( 6/pi*sd%apm(tp)/rhoice) ** one_third ) * ( (Di*1E-6) ** (sd%bpm(tp)/3._wp) )  * 1E6
-                         ! alternative is to comment out above two lines and use the following block
-                         ! MG Mie approach - adjust density of sphere with D = D_characteristic to match particle density
-                         !
-                         ! rcfg%rho_eff(tp,1:ns,iRe_type) = (6/pi)*sd%apm(tp)*(Di*1E-6)**(sd%bpm(tp)-3)   !MG Mie approach
-                         
-                         ! as the particle size gets small it is possible that the mass to size relationship of 
-                         ! (given by power law in hclass.data) can produce impossible results 
-                         ! where the mass is larger than a solid sphere of ice.  
-                         ! This loop ensures that no ice particle can have more mass/density larger than an ice sphere.
-                         ! do i=1,ns
-                         ! if(rcfg%rho_eff(tp,i,iRe_type) > 917 ) then
-                         ! rcfg%rho_eff(tp,i,iRe_type) = 917
-                         ! endif
-                         ! enddo
-                      else
-                         ! Equivalent volume sphere (solid ice rhoice=917 kg/m^3).
-                         rcfg%rho_eff(tp,1:ns,iRe_type) = rhoice
-                         Deq=Di * ((sd%rho(tp)/rhoice)**one_third)
-                         ! alternative ... coment out above two lines and use the following for MG-Mie
-                         ! rcfg%rho_eff(tp,1:ns,iRe_type) = sd%rho(tp)   !MG Mie approach
-                      endif
-                   else
-                      ! I assume here that water phase droplets are spheres.
-                      ! sd%rho should be ~ 1000  or sd%apm=524 .and. sd%bpm=3
-                      Deq = Di
-                   endif
+            if (hm_matrix(pr,k,tp) <= 1E-12) cycle
+            
+            ! Index into temperature dimension of scaling tables
+            !   These tables have regular steps -- exploit this and abandon infind
+            phase = sd%phase(tp)
+            if (phase==0) then
+               itt = infind(mt_ttl,t_kelvin)
+            else
+               itt = infind(mt_tti,t_kelvin) 
+            endif
+            
+            ! Compute effective radius from number concentration and distribution parameters
+            if (Re_internal .eq. 0) then
+               call calc_Re(hm_matrix(pr,k,tp),Np_matrix(pr,k,tp),rho_a, &
+                    sd%dtype(tp),sd%apm(tp),sd%bpm(tp),sd%rho(tp),sd%p1(tp),sd%p2(tp),sd%p3(tp),Re)
+               Re_internal=Re
+               !re_matrix(pr,k,tp)=Re
+            else
+               if (Np_matrix(pr,k,tp) > 0) then
+                  call errorMessage('WARNING(optics/quickbeam_optics.f90): Re and Np set for the same volume & hydrometeor type.  Np is being ignored.')
+               endif
+               Re = Re_internal
+               !Re = re_matrix(pr,k,tp)
+            endif
+            
+            ! Index into particle size dimension of scaling tables 
+            iRe_type=1
+            if(Re.gt.0) then
+               ! Determine index in to scale LUT
+               ! Distance between Re points (defined by "base" and "step") for
+               ! each interval of size Re_BIN_LENGTH
+               ! Integer asignment, avoids calling floor intrinsic
+               n=Re/Re_BIN_LENGTH
+               if (n>=Re_MAX_BIN) n=Re_MAX_BIN-1
+               step = rcfg%step_list(n+1)
+               base = rcfg%base_list(n+1)
+               iRe_type=Re/step
+               if (iRe_type.lt.1) iRe_type=1
+               Re=step*(iRe_type+0.5_wp)    ! set value of Re to closest value allowed in LUT.
+               iRe_type=iRe_type+base-int(n*Re_BIN_LENGTH/step)
+               
+               ! Make sure iRe_type is within bounds
+               if (iRe_type.ge.nRe_types) then
+                  !write(*,*) 'Warning: size of Re exceed value permitted ', &
+                  !            'in Look-Up Table (LUT).  Will calculate. '
+                  ! No scaling allowed
+                  iRe_type=nRe_types
+                  rcfg%Z_scale_flag(tp,itt,iRe_type)=.false.
+               else
+                  ! Set value in re_matrix to closest values in LUT
+                  if (.not. DO_LUT_TEST) re_internal=Re
+                  !if (.not. DO_LUT_TEST) re_matrix(pr,k,tp)=Re
+               endif
+            endif
+            
+            ! Use Ze_scaled, Zr_scaled, and kr_scaled ... if know them
+            ! if not we will calculate Ze, Zr, and Kr from the distribution parameters
+            if( (.not. rcfg%Z_scale_flag(tp,itt,iRe_type)) .or. DO_LUT_TEST)  then
+               ! Create a discrete distribution of hydrometeors within volume
+               select case(sd%dtype(tp))
+               case(4)
+                  ns = 1
+                  allocate(Di(ns),Ni(ns),rhoi(ns),xxa(ns),Deq(ns))
+                  Di = sd%p1(tp)
+                  Ni = 0._wp
+               case default
+                  ns = nd   ! constant defined in simulator/quickbeam.f90
+                  allocate(Di(ns),Ni(ns),rhoi(ns),xxa(ns),Deq(ns))
+                  Di = D
+                  Ni = 0._wp
+               end select
+               call dsd(hm_matrix(pr,k,tp),re_internal,Np_matrix(pr,k,tp), &
+                    Di,Ni,ns,sd%dtype(tp),rho_a,t_kelvin, &
+                    sd%dmin(tp),sd%dmax(tp),sd%apm(tp),sd%bpm(tp), &
+                    sd%rho(tp),sd%p1(tp),sd%p2(tp),sd%p3(tp))
+               
+               ! Calculate particle density
+               if (phase == 1) then
+                  if (sd%rho(tp) < 0) then
+                     ! Use equivalent volume spheres.
+                     rcfg%rho_eff(tp,1:ns,iRe_type) = rhoice ! solid ice == equivalent volume approach
+                     Deq = ( ( 6/pi*sd%apm(tp)/rhoice) ** one_third ) * ( (Di*1E-6) ** (sd%bpm(tp)/3._wp) )  * 1E6
+                     ! alternative is to comment out above two lines and use the following block
+                     ! MG Mie approach - adjust density of sphere with D = D_characteristic to match particle density
+                     !
+                     ! rcfg%rho_eff(tp,1:ns,iRe_type) = (6/pi)*sd%apm(tp)*(Di*1E-6)**(sd%bpm(tp)-3)   !MG Mie approach
+                     
+                     ! as the particle size gets small it is possible that the mass to size relationship of 
+                     ! (given by power law in hclass.data) can produce impossible results 
+                     ! where the mass is larger than a solid sphere of ice.  
+                     ! This loop ensures that no ice particle can have more mass/density larger than an ice sphere.
+                     ! do i=1,ns
+                     ! if(rcfg%rho_eff(tp,i,iRe_type) > 917 ) then
+                     ! rcfg%rho_eff(tp,i,iRe_type) = 917
+                     ! endif
+                     ! enddo
+                  else
+                     ! Equivalent volume sphere (solid ice rhoice=917 kg/m^3).
+                     rcfg%rho_eff(tp,1:ns,iRe_type) = rhoice
+                     Deq=Di * ((sd%rho(tp)/rhoice)**one_third)
+                     ! alternative ... coment out above two lines and use the following for MG-Mie
+                     ! rcfg%rho_eff(tp,1:ns,iRe_type) = sd%rho(tp)   !MG Mie approach
+                  endif
+               else
+                  ! I assume here that water phase droplets are spheres.
+                  ! sd%rho should be ~ 1000  or sd%apm=524 .and. sd%bpm=3
+                  Deq = Di
+               endif
 
-                   ! Calculate effective reflectivity factor of volume
-                   ! xxa are unused (Mie scattering and extinction efficiencies)
-                   xxa(1:ns) = -9.9_wp
-                   rhoi = rcfg%rho_eff(tp,1:ns,iRe_type)
-                   call zeff(rcfg%freq,Deq,Ni,ns,rcfg%k2,t_kelvin,phase,rcfg%do_ray, &
-                        ze,zr,kr,xxa,xxa,rhoi)
+               ! Calculate effective reflectivity factor of volume
+               ! xxa are unused (Mie scattering and extinction efficiencies)
+               xxa(1:ns) = -9.9_wp
+               rhoi = rcfg%rho_eff(tp,1:ns,iRe_type)
+               call zeff(rcfg%freq,Deq,Ni,ns,rcfg%k2,t_kelvin,phase,rcfg%do_ray, &
+                    ze,zr,kr,xxa,xxa,rhoi)
 
-                   ! Test compares total number concentration with sum of discrete samples 
-                   ! The second test, below, compares ab initio and "scaled" computations 
-                   !    of reflectivity
-                   !  These should get broken out as a unit test that gets called on 
-                   !    data. That routine could write to std out. 
-                   
-                   ! Test code ... compare Np value input to routine with sum of DSD
-                   ! NOTE: if .not. DO_LUT_TEST, then you are checking the LUT approximation 
-                   ! not just the DSD representation given by Ni
-                   if(Np_matrix(pr,k,tp)>0 .and. DO_NP_TEST ) then
-                      Np = path_integral(Ni,Di,1,ns-1)/rho_a*1.E6_wp
-                      ! Note: Representation is not great or small Re < 2 
-                      if( (Np_matrix(pr,k,tp)-Np)/Np_matrix(pr,k,tp)>0.1 ) then
-                         call errorMessage('ERROR(optics/quickbeam_optics.f90): Error: Np input does not match sum(N)')
-                      endif
-                   endif
+               ! Test compares total number concentration with sum of discrete samples 
+               ! The second test, below, compares ab initio and "scaled" computations 
+               !    of reflectivity
+               !  These should get broken out as a unit test that gets called on 
+               !    data. That routine could write to std out. 
+               
+               ! Test code ... compare Np value input to routine with sum of DSD
+               ! NOTE: if .not. DO_LUT_TEST, then you are checking the LUT approximation 
+               ! not just the DSD representation given by Ni
+               if(Np_matrix(pr,k,tp)>0 .and. DO_NP_TEST ) then
+                  Np = path_integral(Ni,Di,1,ns-1)/rho_a*1.E6_wp
+                  ! Note: Representation is not great or small Re < 2 
+                  if( (Np_matrix(pr,k,tp)-Np)/Np_matrix(pr,k,tp)>0.1 ) then
+                     call errorMessage('ERROR(optics/quickbeam_optics.f90): Error: Np input does not match sum(N)')
+                  endif
+               endif
 
-                   ! Clean up space
-                   deallocate(Di,Ni,rhoi,xxa,Deq)
+               ! Clean up space
+               deallocate(Di,Ni,rhoi,xxa,Deq)
 
-                   ! LUT test code
-                   ! This segment of code compares full calculation to scaling result
-                   if ( rcfg%Z_scale_flag(tp,itt,iRe_type) .and. DO_LUT_TEST )  then
-                      scale_factor=rho_a*hm_matrix(pr,k,tp)
-                      ! if more than 2 dBZe difference print error message/parameters.
-                      if ( abs(10*log10(ze) - 10*log10(rcfg%Ze_scaled(tp,itt,iRe_type) * &
-                           scale_factor)) > 2 ) then
-                         call errorMessage('ERROR(optics/quickbeam_optics.f90): ERROR: Roj Error?')
-                      endif
-                   endif
-                else
-                   ! Use z scaling
-                   scale_factor=rho_a*hm_matrix(pr,k,tp)
-                   zr = rcfg%Zr_scaled(tp,itt,iRe_type) * scale_factor
-                   ze = rcfg%Ze_scaled(tp,itt,iRe_type) * scale_factor
-                   kr = rcfg%kr_scaled(tp,itt,iRe_type) * scale_factor
-                endif  ! end z_scaling
-                
-                kr_vol(pr,k) = kr_vol(pr,k) + kr
-                z_vol(pr,k)  = z_vol(pr,k)  + ze
-                z_ray(pr,k)  = z_ray(pr,k)  + zr
-                
-                ! Construct Ze_scaled, Zr_scaled, and kr_scaled ... if we can
-                if ( .not. rcfg%Z_scale_flag(tp,itt,iRe_type) ) then
-                   if (iRe_type>1) then
-                      scale_factor=rho_a*hm_matrix(pr,k,tp)
-                      rcfg%Ze_scaled(tp,itt,iRe_type) = ze/ scale_factor
-                      rcfg%Zr_scaled(tp,itt,iRe_type) = zr/ scale_factor
-                      rcfg%kr_scaled(tp,itt,iRe_type) = kr/ scale_factor
-                      rcfg%Z_scale_flag(tp,itt,iRe_type) = .true.
-                      rcfg%Z_scale_added_flag(tp,itt,iRe_type)=.true.
-                   endif
-                endif
-             enddo   ! end loop of tp (hydrometeor type)
-          endif
-       enddo
-    enddo
+               ! LUT test code
+               ! This segment of code compares full calculation to scaling result
+               if ( rcfg%Z_scale_flag(tp,itt,iRe_type) .and. DO_LUT_TEST )  then
+                  scale_factor=rho_a*hm_matrix(pr,k,tp)
+                  ! if more than 2 dBZe difference print error message/parameters.
+                  if ( abs(10*log10(ze) - 10*log10(rcfg%Ze_scaled(tp,itt,iRe_type) * &
+                       scale_factor)) > 2 ) then
+                     call errorMessage('ERROR(optics/quickbeam_optics.f90): ERROR: Roj Error?')
+                  endif
+               endif
+            else
+               ! Use z scaling
+               scale_factor=rho_a*hm_matrix(pr,k,tp)
+               zr = rcfg%Zr_scaled(tp,itt,iRe_type) * scale_factor
+               ze = rcfg%Ze_scaled(tp,itt,iRe_type) * scale_factor
+               kr = rcfg%kr_scaled(tp,itt,iRe_type) * scale_factor
+            endif  ! end z_scaling
+            
+            kr_vol(pr,k) = kr_vol(pr,k) + kr
+            z_vol(pr,k)  = z_vol(pr,k)  + ze
+            z_ray(pr,k)  = z_ray(pr,k)  + zr
+            
+            ! Construct Ze_scaled, Zr_scaled, and kr_scaled ... if we can
+            if ( .not. rcfg%Z_scale_flag(tp,itt,iRe_type) ) then
+               if (iRe_type>1) then
+                  scale_factor=rho_a*hm_matrix(pr,k,tp)
+                  rcfg%Ze_scaled(tp,itt,iRe_type) = ze/ scale_factor
+                  rcfg%Zr_scaled(tp,itt,iRe_type) = zr/ scale_factor
+                  rcfg%kr_scaled(tp,itt,iRe_type) = kr/ scale_factor
+                  rcfg%Z_scale_flag(tp,itt,iRe_type) = .true.
+                  rcfg%Z_scale_added_flag(tp,itt,iRe_type)=.true.
+               endif
+            endif
+         enddo   ! end loop of tp (hydrometeor type)
+      enddo  ! end loop over profiles
+   enddo  ! end loop over range gates (levels)
     
-    where(kr_vol(:,:) <= EPSILON(kr_vol)) 
-       ! Volume is hydrometeor-free	
-       !z_vol(:,:)  = undef
-       z_ray(:,:)  = undef
-    end where
+   ! Reset z_ray for small values
+   ! NOTE: this loop is embarassingly parallel
+   do k = 1,ngate
+      do pr = 1,nprof
+         if (kr_vol(pr,k) <= EPSILON(kr_vol(pr,k))) then
+            ! Volume is hydrometeor-free 
+            z_ray(pr,k) = undef
+         end if
+      end do
+   end do
 
   end subroutine quickbeam_optics
   ! ##############################################################################################
@@ -1271,7 +1260,7 @@ contains
     ! 3 for power law distribution,
     ! 4 for monodisperse distribution,
     ! 5 for lognormal distribution.
-	!
+    !
     ! PHASE - Set to 0 for liquid, 1 for ice.
     ! DMIN  - The minimum drop size for this class (micron), ignored for monodisperse.
     ! DMAX  - The maximum drop size for this class (micron), ignored for monodisperse.
