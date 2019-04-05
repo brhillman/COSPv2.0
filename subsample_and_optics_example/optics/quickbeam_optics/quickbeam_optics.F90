@@ -58,9 +58,9 @@ module mod_quickbeam_optics
    real(wp),dimension(cnt_ice) :: mt_tti 
    real(wp),dimension(cnt_liq) :: mt_ttl
    real(wp),dimension(nd)      :: D
-   !logical :: lQuickbeamInit
   
 contains
+
    ! ######################################################################################
    ! SUBROUTINE quickbeam_optics_init
    ! ######################################################################################
@@ -73,7 +73,6 @@ contains
       do j=2,nd
          D(j) = D(j-1)*exp((log(dmax)-log(dmin))/(nd-1))
       enddo
-      !lQuickbeamInit = .true.
    end subroutine quickbeam_optics_init
    
    ! ######################################################################################
