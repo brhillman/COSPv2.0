@@ -1,0 +1,7 @@
+F90      = ifort
+F90FLAGS = -O3 -traceback -check bounds
+
+#NC_INC      = -I$(CRAY_NETCDF_DIR)/include
+#NC_LIB      = -L$(CRAY_NETCDF_DIR)/lib
+NC_INC      = -I$(NETCDF_DIR)/include
+NC_LIB      = -L$(NETCDF_DIR)/lib
