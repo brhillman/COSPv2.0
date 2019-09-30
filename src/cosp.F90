@@ -258,8 +258,10 @@ MODULE MOD_COSP
      real(wp),dimension(:,:,:),pointer ::   & !
           misr_fq => null()          ! Fraction of the model grid box covered by each of the MISR
                            ! cloud types
-     real(wp),dimension(:,:),pointer ::   & !
-          misr_dist_model_layertops => null() !
+     real(wp),dimension(:,:),pointer ::        &
+          misr_dist_model_layertops => null(), &  ! Number model levels in height bin
+          misr_boxztop => null(),              &  ! Subcolumn cloud top height
+          misr_boxtau => null()                   ! Subcolumn optical depth
      real(wp),dimension(:),pointer ::   & !
           misr_meanztop => null(), & ! Mean MISR cloud top height
           misr_cldarea => null()     ! Mean MISR cloud cover area
@@ -466,7 +468,9 @@ CONTAINS
        Lisccp_subcolumn    = .true.
 
     ! MISR subcolumn
-    if (associated(cospOUT%misr_dist_model_layertops))                                   &
+    if (associated(cospOUT%misr_dist_model_layertops) .or. &
+        associated(cospOUT%misr_boxztop)              .or. &
+        associated(cospOUT%misr_boxtau))                   &
        Lmisr_subcolumn     = .true.
 
     ! CALIPOSO subcolumn
@@ -800,6 +804,12 @@ CONTAINS
        ! Store output (if requested)
        if (associated(cospOUT%misr_dist_model_layertops)) then
           cospOUT%misr_dist_model_layertops(ij:ik,:) = misr_dist_model_layertops
+       endif
+       if (associated(cospOUT%misr_boxztop)) then
+          cospOUT%misr_boxztop(ij:ik,:) = misr_boxztop
+       endif
+       if (associated(cospOUT%misr_boxtau)) then
+          cospOUT%misr_boxtau(ij:ik,:) = misr_boxtau
        endif
     endif
 
@@ -1978,6 +1988,8 @@ CONTAINS
           Lmisr_column    = .false.
           if (associated(cospOUT%misr_fq))                   cospOUT%misr_fq(:,:,:)                 = R_UNDEF
           if (associated(cospOUT%misr_dist_model_layertops)) cospOUT%misr_dist_model_layertops(:,:) = R_UNDEF
+          if (associated(cospOUT%misr_boxztop))              cospOUT%misr_boxztop(:,:)              = R_UNDEF
+          if (associated(cospOUT%misr_boxtau))               cospOUT%misr_boxtau(:,:)               = R_UNDEF
           if (associated(cospOUT%misr_meanztop))             cospOUT%misr_meanztop(:)               = R_UNDEF
           if (associated(cospOUT%misr_cldarea))              cospOUT%misr_cldarea(:)                = R_UNDEF          
        endif
@@ -2560,6 +2572,8 @@ CONTAINS
           if (associated(cospOUT%isccp_fq))            cospOUT%isccp_fq(:,:,:)        = R_UNDEF
           if (associated(cospOUT%misr_fq))                   cospOUT%misr_fq(:,:,:)                 = R_UNDEF
           if (associated(cospOUT%misr_dist_model_layertops)) cospOUT%misr_dist_model_layertops(:,:) = R_UNDEF
+          if (associated(cospOUT%misr_boxztop))              cospOUT%misr_boxztop(:,:)              = R_UNDEF
+          if (associated(cospOUT%misr_boxtau))               cospOUT%misr_boxtau(:,:)               = R_UNDEF
           if (associated(cospOUT%misr_meanztop))             cospOUT%misr_meanztop(:)               = R_UNDEF
           if (associated(cospOUT%misr_cldarea))              cospOUT%misr_cldarea(:)                = R_UNDEF
           if (associated(cospOUT%modis_Cloud_Fraction_Total_Mean))                          &
@@ -2634,6 +2648,8 @@ CONTAINS
           if (associated(cospOUT%isccp_fq))            cospOUT%isccp_fq(:,:,:)        = R_UNDEF
           if (associated(cospOUT%misr_fq))                   cospOUT%misr_fq(:,:,:)                 = R_UNDEF
           if (associated(cospOUT%misr_dist_model_layertops)) cospOUT%misr_dist_model_layertops(:,:) = R_UNDEF
+          if (associated(cospOUT%misr_boxztop))              cospOUT%misr_boxztop(:,:)              = R_UNDEF
+          if (associated(cospOUT%misr_boxtau))               cospOUT%misr_boxtau(:,:)               = R_UNDEF
           if (associated(cospOUT%misr_meanztop))             cospOUT%misr_meanztop(:)               = R_UNDEF
           if (associated(cospOUT%misr_cldarea))              cospOUT%misr_cldarea(:)                = R_UNDEF
           if (associated(cospOUT%calipso_cfad_sr))       cospOUT%calipso_cfad_sr(:,:,:)       = R_UNDEF
@@ -2794,6 +2810,8 @@ CONTAINS
           LgrLidar532_column  = .false.
           if (associated(cospOUT%misr_fq))                   cospOUT%misr_fq(:,:,:)                 = R_UNDEF
           if (associated(cospOUT%misr_dist_model_layertops)) cospOUT%misr_dist_model_layertops(:,:) = R_UNDEF
+          if (associated(cospOUT%misr_boxztop))              cospOUT%misr_boxztop(:,:)              = R_UNDEF
+          if (associated(cospOUT%misr_boxtau))               cospOUT%misr_boxtau(:,:)               = R_UNDEF
           if (associated(cospOUT%misr_meanztop))             cospOUT%misr_meanztop(:)               = R_UNDEF
           if (associated(cospOUT%misr_cldarea))              cospOUT%misr_cldarea(:)                = R_UNDEF
           if (associated(cospOUT%calipso_cfad_sr))           cospOUT%calipso_cfad_sr(:,:,:)         = R_UNDEF
@@ -3008,6 +3026,8 @@ CONTAINS
           if (associated(cospOUT%isccp_fq))            cospOUT%isccp_fq(:,:,:)        = R_UNDEF
           if (associated(cospOUT%misr_fq))                   cospOUT%misr_fq(:,:,:)                 = R_UNDEF
           if (associated(cospOUT%misr_dist_model_layertops)) cospOUT%misr_dist_model_layertops(:,:) = R_UNDEF
+          if (associated(cospOUT%misr_boxztop))              cospOUT%misr_boxztop(:,:)              = R_UNDEF
+          if (associated(cospOUT%misr_boxtau))               cospOUT%misr_boxtau(:,:)               = R_UNDEF
           if (associated(cospOUT%misr_meanztop))             cospOUT%misr_meanztop(:)               = R_UNDEF
           if (associated(cospOUT%misr_cldarea))              cospOUT%misr_cldarea(:)                = R_UNDEF
           if (associated(cospOUT%modis_Cloud_Fraction_Total_Mean))                          &
